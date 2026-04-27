@@ -5,11 +5,14 @@
   "packageManager": "pnpm@10.25.0",
   "scripts": {
     "dev": "pnpm --filter @scout/api dev",
-    "api": "pnpm --filter @scout/api api",
     "dev:api": "pnpm --filter @scout/api dev:api",
-    "start": "pnpm --filter @scout/api start",
-    "test": "pnpm -r test",
-    "typecheck": "pnpm -r typecheck"
+    "dev:web": "pnpm --filter @scout/web dev",
+    "api": "pnpm --filter @scout/api api",
+    "build:web": "pnpm --filter @scout/web build",
+    "start:api": "pnpm --filter @scout/api start",
+    "start:web": "pnpm --filter @scout/web start",
+    "test": "pnpm -r --if-present test",
+    "typecheck": "pnpm -r --if-present typecheck"
   },
   "devDependencies": {
     "@modelcontextprotocol/sdk": "^1.29.0",
