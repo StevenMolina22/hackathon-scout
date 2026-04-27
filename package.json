@@ -4,6 +4,8 @@
   "scripts": {
     "dev": "tsx src/index.ts",
     "api": "tsx src/server.ts",
+    "dev:api": "tsx --watch src/server.ts",
+    "start": "node --import tsx src/server.ts",
     "test": "tsx --test tests/**/*.test.ts",
     "typecheck": "tsc --noEmit"
   },
@@ -16,8 +18,11 @@
   },
   "dependencies": {
     "@ai-sdk/openai": "^3.0.53",
+    "@hono/node-server": "^2.0.0",
+    "@hono/zod-validator": "^0.7.6",
     "@openrouter/ai-sdk-provider": "^2.8.1",
     "ai": "^6.0.168",
+    "hono": "^4.12.15",
     "zod": "^4.3.6"
   }
 }

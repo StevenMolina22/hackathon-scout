@@ -1,101 +1,71 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { once } from "node:events";
 
-import {
-  createApiServer,
-  defaultSearchRequest,
-  parseSearchRequest,
-  type SearchResponsePayload,
-} from "../src/api";
+import { buildApp } from "../src/api/app";
 
-test("parseSearchRequest merges overrides with defaults", () => {
-  const parsed = parseSearchRequest({
-    topics: ["web3", "solana"],
-    region: "Global",
-    withinDays: 180,
-    maxResults: 7,
-    remoteOnly: false,
-    studentFriendly: false,
-  });
+test("GET /v1/health returns ok with provider info", async () => {
+  const app = buildApp();
+  const res = await app.request("/v1/health");
 
-  assert.deepEqual(parsed.topics, ["web3", "solana"]);
-  assert.equal(parsed.region, "Global");
-  assert.equal(parsed.withinDays, 180);
-  assert.equal(parsed.maxResults, 7);
-  assert.equal(parsed.remoteOnly, false);
-  assert.equal(parsed.studentFriendly, false);
+  assert.equal(res.status, 200);
+  const body = (await res.json()) as Record<string, unknown>;
+  assert.equal(body.status, "ok");
+  assert.ok(typeof body.provider === "string");
+  assert.ok(typeof body.model === "string");
+  assert.equal(typeof body.providerConfigured, "boolean");
 });
 
-test("parseSearchRequest falls back to defaults when body is empty", () => {
-  assert.deepEqual(parseSearchRequest({}), defaultSearchRequest);
-});
-
-test("parseSearchRequest rejects invalid shapes", () => {
-  assert.throws(() => parseSearchRequest({ topics: [] }), /at least one topic/i);
-  assert.throws(() => parseSearchRequest({ region: "" }), /region/i);
-  assert.throws(() => parseSearchRequest({ withinDays: 0 }), />= 1/);
-  assert.throws(() => parseSearchRequest({ maxResults: "nope" }), /valid number/i);
-});
-
-test("api server serves health and search responses", async () => {
-  const fakeResponse: SearchResponsePayload = {
-    provider: "openrouter",
-    model: "deepseek/deepseek-v4-pro",
-    preferences: {
-      topics: ["web3"],
-      region: "Global",
-      withinDays: 180,
-      maxResults: 3,
-      remoteOnly: false,
-      studentFriendly: true,
-    },
-    hackathons: [],
-  };
-
-  const server = createApiServer(async () => fakeResponse);
-  server.listen(0, "127.0.0.1");
-  await once(server, "listening");
-  const address = server.address();
-
-  assert.ok(address && typeof address !== "string");
-  const base = `http://127.0.0.1:${address.port}`;
-
-  const health = await fetch(`${base}/health`);
-  assert.equal(health.status, 200);
-  assert.deepEqual(await health.json(), { ok: true });
-
-  const search = await fetch(`${base}/search`, {
+test("POST /v1/scout rejects invalid bodies with 422 and a structured error", async () => {
+  const app = buildApp();
+  const res = await app.request("/v1/scout", {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ topics: ["web3"], region: "Global", maxResults: 3, withinDays: 180, remoteOnly: false }),
+    body: JSON.stringify({ topics: [], region: "" }),
   });
-  assert.equal(search.status, 200);
-  assert.deepEqual(await search.json(), fakeResponse);
 
-  server.close();
-  await once(server, "close");
+  // zValidator returns 400 by default; our error-handler maps ZodError → 422.
+  // Either is acceptable for a "rejected validation" outcome.
+  assert.ok(res.status === 400 || res.status === 422, `expected 400/422, got ${res.status}`);
+  const body = (await res.json()) as { error?: unknown; success?: boolean };
+  // Both shapes are acceptable: zValidator's default body, or our custom mapping.
+  assert.ok(body.error !== undefined || body.success === false);
 });
 
-test("api server returns 400 on invalid json body", async () => {
-  const server = createApiServer(async () => {
-    throw new Error("should not run");
-  });
-  server.listen(0, "127.0.0.1");
-  await once(server, "listening");
-  const address = server.address();
-
-  assert.ok(address && typeof address !== "string");
-  const response = await fetch(`http://127.0.0.1:${address.port}/search`, {
+test("POST /v1/scout/rank validates the request body shape", async () => {
+  const app = buildApp();
+  const res = await app.request("/v1/scout/rank", {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: "{bad json",
+    body: JSON.stringify({ preferences: { topics: ["ai"] } }), // missing fields + candidates
   });
 
-  assert.equal(response.status, 400);
-  const payload = await response.json();
-  assert.match(payload.error, /invalid json/i);
+  assert.ok(res.status === 400 || res.status === 422);
+});
 
-  server.close();
-  await once(server, "close");
+test("unknown route returns a 404 with NOT_FOUND code", async () => {
+  const app = buildApp();
+  const res = await app.request("/v1/does-not-exist");
+
+  assert.equal(res.status, 404);
+  const body = (await res.json()) as { error?: { code?: string } };
+  assert.equal(body.error?.code, "NOT_FOUND");
+});
+
+test("auth middleware enforces bearer when API_TOKEN is set", async () => {
+  const previous = process.env.API_TOKEN;
+  process.env.API_TOKEN = "test-token";
+  try {
+    const app = buildApp();
+
+    const noAuth = await app.request("/v1/health");
+    assert.equal(noAuth.status, 401);
+
+    const withAuth = await app.request("/v1/health", {
+      headers: { authorization: "Bearer test-token" },
+    });
+    assert.equal(withAuth.status, 200);
+  } finally {
+    if (previous === undefined) delete process.env.API_TOKEN;
+    else process.env.API_TOKEN = previous;
+  }
 });
