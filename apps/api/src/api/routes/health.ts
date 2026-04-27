@@ -1,6 +1,6 @@
 import { Hono } from "hono";
 
-import { getProviderInfo } from "../../lib/providers";
+import { getProviderInfo } from "@scout/core";
 import type { AppEnv } from "../env";
 
 export const healthRouter = new Hono<AppEnv>();

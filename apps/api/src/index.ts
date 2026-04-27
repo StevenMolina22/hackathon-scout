@@ -1,6 +1,6 @@
+import { runScout, type RankedHackathon } from "@scout/core";
+
 import { getHelpText, resolveRunConfig } from "./cli";
-import { runScout } from "./lib/scout";
-import type { RankedHackathon } from "./lib/schemas";
 
 function printSummary(hackathons: RankedHackathon[], provider: string, modelId: string): void {
   if (hackathons.length === 0) {

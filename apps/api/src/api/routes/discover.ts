@@ -1,9 +1,11 @@
 import { zValidator } from "@hono/zod-validator";
 import { Hono } from "hono";
 
-import { discoverHackathonsWithEvidence } from "../../lib/extract";
-import { getModel } from "../../lib/providers";
-import { PreferencesSchema } from "../../lib/schemas";
+import {
+  PreferencesSchema,
+  discoverHackathonsWithEvidence,
+  getModel,
+} from "@scout/core";
 import type { AppEnv } from "../env";
 
 export const discoverRouter = new Hono<AppEnv>();

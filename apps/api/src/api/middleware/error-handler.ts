@@ -2,7 +2,7 @@ import type { Context } from "hono";
 import { HTTPException } from "hono/http-exception";
 import { ZodError } from "zod";
 
-import { ApiError, codeToStatus, type ApiErrorCode } from "../../lib/errors";
+import { ApiError, codeToStatus, type ApiErrorCode } from "@scout/core";
 import type { AppEnv } from "../env";
 
 export function errorHandler(err: Error, c: Context<AppEnv>): Response {

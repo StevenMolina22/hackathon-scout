@@ -1,0 +1,26 @@
+{
+  "name": "@scout/api",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "tsx src/index.ts",
+    "api": "tsx src/server.ts",
+    "dev:api": "tsx --watch src/server.ts",
+    "start": "node --import tsx src/server.ts",
+    "test": "tsx --test tests/**/*.test.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@hono/node-server": "^2.0.0",
+    "@hono/zod-validator": "^0.7.6",
+    "@scout/core": "workspace:*",
+    "hono": "^4.12.15",
+    "zod": "^4.3.6"
+  },
+  "devDependencies": {
+    "@types/node": "^25.5.2",
+    "tsx": "^4.21.0",
+    "typescript": "^6.0.2"
+  }
+}

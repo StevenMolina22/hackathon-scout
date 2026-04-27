@@ -1,28 +1,19 @@
 {
-  "packageManager": "pnpm@10.25.0",
+  "name": "hackathon-scout",
+  "private": true,
   "type": "module",
+  "packageManager": "pnpm@10.25.0",
   "scripts": {
-    "dev": "tsx src/index.ts",
-    "api": "tsx src/server.ts",
-    "dev:api": "tsx --watch src/server.ts",
-    "start": "node --import tsx src/server.ts",
-    "test": "tsx --test tests/**/*.test.ts",
-    "typecheck": "tsc --noEmit"
+    "dev": "pnpm --filter @scout/api dev",
+    "api": "pnpm --filter @scout/api api",
+    "dev:api": "pnpm --filter @scout/api dev:api",
+    "start": "pnpm --filter @scout/api start",
+    "test": "pnpm -r test",
+    "typecheck": "pnpm -r typecheck"
   },
   "devDependencies": {
     "@modelcontextprotocol/sdk": "^1.29.0",
     "@types/json-schema": "^7.0.15",
-    "@types/node": "^25.5.2",
-    "tsx": "^4.21.0",
     "typescript": "^6.0.2"
-  },
-  "dependencies": {
-    "@ai-sdk/openai": "^3.0.53",
-    "@hono/node-server": "^2.0.0",
-    "@hono/zod-validator": "^0.7.6",
-    "@openrouter/ai-sdk-provider": "^2.8.1",
-    "ai": "^6.0.168",
-    "hono": "^4.12.15",
-    "zod": "^4.3.6"
   }
 }

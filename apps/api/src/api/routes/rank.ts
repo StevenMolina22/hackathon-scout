@@ -1,9 +1,7 @@
 import { zValidator } from "@hono/zod-validator";
 import { Hono } from "hono";
 
-import { getModel } from "../../lib/providers";
-import { rankHackathons } from "../../lib/rank";
-import { RankRequestSchema } from "../../lib/schemas";
+import { RankRequestSchema, getModel, rankHackathons } from "@scout/core";
 import type { AppEnv } from "../env";
 
 export const rankRouter = new Hono<AppEnv>();

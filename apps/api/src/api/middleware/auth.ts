@@ -1,6 +1,6 @@
 import type { MiddlewareHandler } from "hono";
 
-import { ApiError } from "../../lib/errors";
+import { ApiError } from "@scout/core";
 import type { AppEnv } from "../env";
 
 /**

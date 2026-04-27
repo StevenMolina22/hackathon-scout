@@ -1,52 +1,44 @@
 # hackathon-scout
 
-TypeScript service that discovers and ranks upcoming hackathons against a user's
-preferences. It ships as both a CLI and a [Hono](https://hono.dev) HTTP API,
-backed by the Vercel AI SDK with either OpenAI or OpenRouter.
+A pnpm workspace monorepo. Discovers and ranks upcoming hackathons against a
+user's preferences via the Vercel AI SDK with either OpenAI or OpenRouter.
+
+```text
+hackathon-scout/
+  packages/
+    core/        # @scout/core — pure pipeline (schemas, providers, discovery,
+                 #               extract, rank, scout). No HTTP, no Hono.
+  apps/
+    api/         # @scout/api  — Hono HTTP API, Vercel function, Node CLI.
+                 #               Imports @scout/core. Deployed to Vercel.
+    web/         # placeholder for the future web frontend.
+```
+
+The split mirrors the architecture: **`@scout/core` is pure logic**, **`@scout/api`
+is transport**. The CLI, HTTP API, and any future MCP server all consume the
+same `runScout` / `streamScout` from core.
 
 ## Requirements
 
 - Node.js 18+
-- `pnpm`
-- One provider configured:
-  - `OPENAI_API_KEY`, or
-  - `OPENROUTER_API_KEY`
+- `pnpm` 10+
+- One LLM provider configured: `OPENAI_API_KEY` or `OPENROUTER_API_KEY`
 
 ## Install
 
 ```bash
-pnpm install
+pnpm install        # installs everything and links @scout/core into apps/api
 ```
 
 ## Configure
 
-Copy `env.example` into your own local env file (or export the variables).
+Copy `env.example` and export the variables locally (or use a tool like
+`direnv` / `dotenv-cli`). See `env.example` for the full list.
 
-OpenRouter:
+## CLI (apps/api)
 
-```bash
-export LLM_PROVIDER=openrouter
-export OPENROUTER_API_KEY=your_key_here
-export OPENROUTER_MODEL=openai/gpt-4.1-mini
-```
-
-OpenAI:
-
-```bash
-export LLM_PROVIDER=openai
-export OPENAI_API_KEY=your_key_here
-export OPENAI_MODEL=gpt-5-mini
-```
-
-Optional knobs:
-
-- `MODEL_ID` overrides the model for either provider
-- `OPENROUTER_HTTP_REFERER`, `OPENROUTER_APP_TITLE` add OpenRouter app metadata
-- `API_TOKEN` enables bearer auth on `/v1/*`
-- `CORS_ORIGINS` (comma-separated) restricts CORS; defaults to `*`
-- `LOG_LEVEL` = `debug | info | warn | error`
-
-## CLI
+The CLI calls `runScout` from `@scout/core` directly — it does not hit the
+deployed API. Run it from the repo root:
 
 ```bash
 pnpm dev                                    # default search
@@ -54,20 +46,26 @@ pnpm dev -- --topics AI,climate --json      # custom search, JSON-only
 pnpm dev -- --help                          # full flag reference
 ```
 
-## HTTP API (Hono)
+Or scoped to the package:
+
+```bash
+pnpm --filter @scout/api dev -- --topics AI,climate
+```
+
+## HTTP API (apps/api)
 
 Local dev:
 
 ```bash
-pnpm dev:api                # tsx --watch src/server.ts
-# or
-pnpm api                    # one-shot
+pnpm dev:api        # tsx --watch in apps/api
+pnpm api            # one-shot (no watch)
 ```
 
 Default address: `http://127.0.0.1:8787`
 
-The same `buildApp()` is exported by `src/api/app.ts` and reused by both the
-Node server (`src/server.ts`) and the Vercel function (`api/index.ts`).
+The same `buildApp()` is exported by `apps/api/src/api/app.ts` and reused by
+both the Node server (`apps/api/src/server.ts`) and the Vercel function
+(`apps/api/api/index.ts`).
 
 ### Routes
 
@@ -116,14 +114,6 @@ curl -N -X POST http://127.0.0.1:8787/v1/scout \
 The SSE stream emits `event: stage`, `event: discovered`, `event: ranked`, and
 finally `event: done` (or `event: error`).
 
-Rank a curated list:
-
-```bash
-curl -X POST http://127.0.0.1:8787/v1/scout/rank \
-  -H 'content-type: application/json' \
-  -d '{ "preferences": { ... }, "candidates": [ ... ] }'
-```
-
 ### Error model
 
 Every error response shares this shape:
@@ -131,7 +121,7 @@ Every error response shares this shape:
 ```jsonc
 {
   "error": {
-    "code": "VALIDATION_ERROR",   // see src/lib/errors.ts for the full enum
+    "code": "VALIDATION_ERROR",   // see packages/core/src/errors.ts for the full enum
     "message": "Request validation failed.",
     "requestId": "…",
     "details": [ /* optional, e.g. zod issues */ ]
@@ -152,72 +142,56 @@ Every error response shares this shape:
 
 ## Deploy
 
-### Vercel
+### Vercel (recommended)
 
-`api/index.ts` re-exports the Hono app via `hono/vercel`. `vercel.json`
-rewrites `/v1/*` onto the function and bumps `maxDuration` to 300s for the
-long pipeline. No extra config needed beyond the env vars.
+Create a Vercel project pointing at this repo with **Root Directory =
+`apps/api`**. Vercel auto-detects the pnpm workspace at the repo root and
+runs `pnpm install` from there, so `@scout/core` is linked correctly inside
+the function bundle.
+
+- `apps/api/api/index.ts` is the function entrypoint (Node runtime, `maxDuration: 300`).
+- `apps/api/vercel.json` rewrites `/v1/*` → `/api/index`.
+- Set env vars (`OPENAI_API_KEY` *or* `OPENROUTER_API_KEY`, plus optional
+  `CORS_ORIGINS`, `API_TOKEN`, etc.) in the Vercel dashboard.
+- `maxDuration: 300` requires Pro + Fluid Compute. On Hobby, lower it to `60`.
+
+When `apps/web` is added later, create a **second** Vercel project with Root
+Directory = `apps/web`. Deploy them independently; they share `@scout/core`
+through the workspace.
 
 ### Node container (Railway / Fly / Render / self-host)
 
 ```bash
-pnpm start                  # node --import tsx src/server.ts
+pnpm start          # node --import tsx in apps/api
 ```
 
 `PORT` and `HOST` env vars are honored.
 
-## Repository layout
-
-```text
-api/
-  index.ts                 # Vercel function entrypoint
-src/
-  index.ts                 # CLI entrypoint
-  server.ts                # Node server entrypoint (@hono/node-server)
-  cli.ts                   # CLI flag parsing
-  api/
-    app.ts                 # buildApp(): Hono instance, routes, middleware
-    env.ts                 # AppEnv type
-    middleware/            # request-id, logger, auth, error-handler
-    routes/                # health, scout, discover, rank
-  lib/
-    schemas.ts             # zod: Preferences, Discovered, Ranked
-    providers.ts           # lazy getModel(), getProviderInfo()
-    discovery.ts           # RSS search + scrape + enrichment (pure)
-    extract.ts             # discoverHackathons() — LLM call #1
-    rank.ts                # rankHackathons(), streamRankedHackathons()
-    scout.ts               # runScout(), streamScout() — orchestrator
-    errors.ts              # ApiError + code → status map
-tests/
-  cli.test.ts
-  api.test.ts              # exercises buildApp() via Hono's fetch test client
-vercel.json
-```
-
 ## Architecture
 
-`lib/*` is pure TypeScript with zero Hono imports — the CLI, HTTP API, and
-(future) MCP server all consume it. `api/*` is transport-only: validation,
-auth, error mapping, streaming. Two thin entrypoints (`api/index.ts`,
-`src/server.ts`) wrap the same `buildApp()`.
+`packages/core/*` is pure TypeScript with zero Hono imports — the CLI, HTTP
+API, and (future) MCP server all consume it. `apps/api/src/api/*` is
+transport-only: validation, auth, error mapping, streaming. Two thin
+entrypoints (`apps/api/api/index.ts`, `apps/api/src/server.ts`) wrap the same
+`buildApp()`.
 
 The pipeline:
 
-1. **Discovery** (`lib/discovery.ts`) — Bing RSS search, then lightweight HTML
+1. **Discovery** (`core/discovery.ts`) — Bing RSS search, then lightweight HTML
    scraping for evidence excerpts.
-2. **Extraction** (`lib/extract.ts`) — LLM turns the evidence into structured
+2. **Extraction** (`core/extract.ts`) — LLM turns the evidence into structured
    `DiscoveredHackathon` candidates (zod-validated).
-3. **Filtering** (`lib/extract.ts`) — local code drops bad results, enforces
+3. **Filtering** (`core/extract.ts`) — local code drops bad results, enforces
    the date window + remote preference, and dedupes by title + date.
-4. **Ranking** (`lib/rank.ts`) — second LLM call scores and explains each
+4. **Ranking** (`core/rank.ts`) — second LLM call scores and explains each
    candidate; `streamRankedHackathons` yields items as the model produces them.
 
 ## Testing
 
 ```bash
-pnpm typecheck
-pnpm test
+pnpm typecheck      # runs tsc --noEmit in every package
+pnpm test           # runs each package's test script
 ```
 
-`tests/api.test.ts` uses Hono's built-in `app.request(...)` test client — no
-HTTP server needs to be started.
+`apps/api/tests/api.test.ts` uses Hono's built-in `app.request(...)` test
+client — no HTTP server needs to be started.
