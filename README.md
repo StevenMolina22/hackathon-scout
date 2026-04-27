@@ -43,14 +43,88 @@ Optional knobs:
 
 ## Run
 
+Default search:
+
 ```bash
 pnpm dev
 ```
+
+Custom search:
+
+```bash
+pnpm dev -- --topics AI,climate,agents --region Europe --within-days 120 --max-results 8
+```
+
+JSON-only output:
+
+```bash
+pnpm dev -- --topics AI,climate --json
+```
+
+Help:
+
+```bash
+pnpm dev -- --help
+```
+
+Validation and tests:
+
+```bash
+pnpm typecheck
+pnpm test
+```
+
+## API
+
+Start the API:
+
+```bash
+pnpm api
+```
+
+Default address:
+
+- `http://127.0.0.1:8787`
+
+Health check:
+
+```bash
+curl http://127.0.0.1:8787/health
+```
+
+Search endpoint:
+
+```bash
+curl -X POST http://127.0.0.1:8787/search \
+  -H 'content-type: application/json' \
+  -d '{
+    "topics": ["web3", "crypto", "blockchain"],
+    "region": "Global",
+    "withinDays": 180,
+    "maxResults": 5,
+    "remoteOnly": false,
+    "studentFriendly": true
+  }'
+```
+
+Request fields:
+
+- `topics`: string[]
+- `region`: string
+- `withinDays`: number
+- `maxResults`: number
+- `remoteOnly`: boolean
+- `studentFriendly`: boolean
 
 ## Project structure
 
 ```text
 src/index.ts
+src/cli.ts
+src/api.ts
+src/server.ts
+tests/cli.test.ts
+tests/api.test.ts
 tsconfig.json
 package.json
 env.example
@@ -61,7 +135,7 @@ env.example
 The current implementation keeps the first version intentionally small.
 
 1. Interface layer
-   `src/index.ts` defines a `preferences` object. This can later become CLI args or an HTTP request body.
+   `src/cli.ts` parses CLI flags, `src/api.ts` exposes HTTP request handling, and `src/index.ts` executes the search flow.
 2. Discovery layer
    The script performs live web discovery through Bing RSS search plus lightweight page scraping.
 3. AI SDK extraction layer

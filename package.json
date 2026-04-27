@@ -2,7 +2,10 @@
   "packageManager": "pnpm@10.25.0",
   "type": "module",
   "scripts": {
-    "dev": "tsx src/index.ts"
+    "dev": "tsx src/index.ts",
+    "api": "tsx src/server.ts",
+    "test": "tsx --test tests/**/*.test.ts",
+    "typecheck": "tsc --noEmit"
   },
   "devDependencies": {
     "@modelcontextprotocol/sdk": "^1.29.0",

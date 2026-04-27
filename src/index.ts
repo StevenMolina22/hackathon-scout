@@ -3,14 +3,11 @@ import { createOpenRouter } from "@openrouter/ai-sdk-provider";
 import { generateText, Output } from "ai";
 import { z } from "zod";
 
-type HackathonPreferences = {
-  topics: string[];
-  region: string;
-  remoteOnly: boolean;
-  withinDays: number;
-  studentFriendly: boolean;
-  maxResults: number;
-};
+import {
+  getHelpText,
+  resolveRunConfig,
+  type HackathonPreferences,
+} from "./cli";
 
 type SearchCandidate = {
   title: string;
@@ -19,6 +16,8 @@ type SearchCandidate = {
   source: string;
   pageExcerpt: string;
 };
+
+type EventFormat = "remote" | "hybrid" | "in-person" | "unknown";
 
 type DiscoveredHackathon = {
   title: string;
@@ -29,7 +28,7 @@ type DiscoveredHackathon = {
   endDate: string;
   deadline: string;
   location: string;
-  remote: boolean;
+  format: EventFormat;
   themes: string[];
   prize: string;
   summary: string;
@@ -49,15 +48,6 @@ const PAGE_EXCERPT_LIMIT = 1800;
 const USER_AGENT =
   "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36";
 
-const preferences: HackathonPreferences = {
-  topics: ["AI", "climate"],
-  region: "Europe",
-  remoteOnly: true,
-  withinDays: 90,
-  studentFriendly: true,
-  maxResults: 5,
-};
-
 const discoveredHackathonSchema = z.object({
   hackathons: z.array(
     z.object({
@@ -69,7 +59,7 @@ const discoveredHackathonSchema = z.object({
       endDate: z.string(),
       deadline: z.string(),
       location: z.string(),
-      remote: z.boolean(),
+      format: z.enum(["remote", "hybrid", "in-person", "unknown"]),
       themes: z.array(z.string()),
       prize: z.string(),
       summary: z.string(),
@@ -162,6 +152,19 @@ function createProvider() {
 
 const llm = createProvider();
 const model = llm.client(llm.modelId);
+
+function getOpenRouterDiscoveryModel(input: HackathonPreferences) {
+  return llm.client(llm.modelId, {
+    plugins: [
+      {
+        id: "web",
+        max_results: Math.max(input.maxResults * 2, 8),
+        search_prompt: `Find upcoming ${input.remoteOnly ? "remote or hybrid " : ""}${input.topics.join("/")} hackathons in ${input.region} within the next ${input.withinDays} days. Prefer official event pages.`,
+      },
+      { id: "response-healing" },
+    ],
+  });
+}
 
 function decodeXml(value: string): string {
   return value
@@ -312,7 +315,32 @@ async function enrichCandidates(
   );
 }
 
-function buildDiscoveryPrompt(
+function buildNativeDiscoveryPrompt(input: HackathonPreferences): string {
+  const remoteLine = input.remoteOnly
+    ? "remote or hybrid hackathons only"
+    : "remote, hybrid, and in-person hackathons";
+  const today = new Date().toISOString().slice(0, 10);
+
+  return [
+    "Find upcoming hackathons using live web search.",
+    `Today's date is ${today}.`,
+    `Topics: ${input.topics.join(", ")}.`,
+    `Region: ${input.region}.`,
+    `Time window: next ${input.withinDays} days.`,
+    `Format: ${remoteLine}.`,
+    `Student-friendly: ${input.studentFriendly ? "prefer student-friendly events" : "not required"}.`,
+    'For the format field, use exactly one of: "remote", "hybrid", "in-person", or "unknown".',
+    "Prefer official event pages over aggregators.",
+    "Exclude expired events or pages without a clear source URL.",
+    "Use the year shown on the source page and return ISO dates in YYYY-MM-DD format whenever possible.",
+    "Do not convert clearly upcoming 2026 events into past 2025 dates.",
+    "If a field is unknown, return an empty string or empty array instead of inventing data.",
+    `Return at most ${Math.max(input.maxResults * 2, 8)} candidates as JSON matching the schema.`,
+    "If few exact matches exist, still return the best relevant upcoming hackathons instead of an empty list.",
+  ].join(" ");
+}
+
+function buildEvidenceDiscoveryPrompt(
   input: HackathonPreferences,
   candidates: SearchCandidate[],
 ): string {
@@ -328,6 +356,7 @@ function buildDiscoveryPrompt(
     `Time window: next ${input.withinDays} days when dates are available.`,
     `Format: ${remoteLine}.`,
     `Student-friendly: ${input.studentFriendly ? "prefer student-friendly events" : "not required"}.`,
+    'For the format field, use exactly one of: "remote", "hybrid", "in-person", or "unknown".',
     "Use only the supplied evidence. Do not invent facts.",
     "If a field is unknown, return an empty string or empty array instead of guessing.",
     "If a result is clearly not a hackathon or looks expired, omit it.",
@@ -351,22 +380,61 @@ function buildRankingPrompt(
   ].join(" ");
 }
 
-function isFutureDateWithinWindow(value: string, withinDays: number): boolean {
+function parseOptionalDate(value: string): Date | null {
   if (!value) {
-    return true;
+    return null;
   }
 
   const parsed = new Date(value);
+  return Number.isNaN(parsed.getTime()) ? null : parsed;
+}
 
-  if (Number.isNaN(parsed.getTime())) {
-    return true;
-  }
-
+function isHackathonActiveOrUpcoming(
+  candidate: DiscoveredHackathon,
+  withinDays: number,
+): boolean {
   const now = new Date();
   const latest = new Date(now);
   latest.setDate(now.getDate() + withinDays);
 
-  return parsed >= now && parsed <= latest;
+  const start = parseOptionalDate(candidate.startDate);
+  const end = parseOptionalDate(candidate.endDate);
+  const deadline = parseOptionalDate(candidate.deadline);
+  const dates = [start, end, deadline].filter((value): value is Date => value !== null);
+
+  if (dates.length === 0) {
+    return true;
+  }
+
+  if (start && start >= now && start <= latest) {
+    return true;
+  }
+
+  if (deadline && deadline >= now && deadline <= latest) {
+    return true;
+  }
+
+  if (end && end >= now && end <= latest) {
+    return true;
+  }
+
+  if (start && end && start <= now && end >= now) {
+    return true;
+  }
+
+  if (start && deadline && start <= now && deadline >= now) {
+    return true;
+  }
+
+  return false;
+}
+
+function isAcceptableFormat(format: EventFormat, remoteOnly: boolean): boolean {
+  if (!remoteOnly) {
+    return true;
+  }
+
+  return format === "remote" || format === "hybrid";
 }
 
 function normalizeAndFilter(
@@ -380,11 +448,11 @@ function normalizeAndFilter(
       continue;
     }
 
-    if (input.remoteOnly && !candidate.remote) {
+    if (!isAcceptableFormat(candidate.format, input.remoteOnly)) {
       continue;
     }
 
-    if (!isFutureDateWithinWindow(candidate.startDate, input.withinDays)) {
+    if (!isHackathonActiveOrUpcoming(candidate, input.withinDays)) {
       continue;
     }
 
@@ -401,6 +469,16 @@ function normalizeAndFilter(
 async function discoverHackathons(
   input: HackathonPreferences,
 ): Promise<DiscoveredHackathon[]> {
+  if (llm.provider === "openrouter") {
+    const result = await generateText({
+      model: getOpenRouterDiscoveryModel(input),
+      output: Output.object({ schema: discoveredHackathonSchema }),
+      prompt: buildNativeDiscoveryPrompt(input),
+    });
+
+    return normalizeAndFilter(result.output.hackathons, input);
+  }
+
   const rawCandidates = await searchHackathonPages(input);
   const enrichedCandidates = await enrichCandidates(rawCandidates);
 
@@ -411,7 +489,7 @@ async function discoverHackathons(
   const result = await generateText({
     model,
     output: Output.object({ schema: discoveredHackathonSchema }),
-    prompt: buildDiscoveryPrompt(input, enrichedCandidates),
+    prompt: buildEvidenceDiscoveryPrompt(input, enrichedCandidates),
   });
 
   return normalizeAndFilter(result.output.hackathons, input);
@@ -446,31 +524,35 @@ function printSummary(hackathons: RankedHackathon[]): void {
     console.log(`${index + 1}. ${hackathon.title} (${hackathon.score}/100)`);
     console.log(`   ${hackathon.url}`);
     console.log(`   ${hackathon.startDate} -> ${hackathon.endDate}`);
-    console.log(`   ${hackathon.location} | remote=${String(hackathon.remote)}`);
+    console.log(`   ${hackathon.location} | format=${hackathon.format}`);
     console.log(`   ${hackathon.whyMatch}`);
     console.log("");
   }
 }
 
 async function main() {
-  const discovered = await discoverHackathons(preferences);
-  const ranked = await rankHackathons(preferences, discovered);
+  const runConfig = resolveRunConfig(process.argv.slice(2));
 
-  printSummary(ranked);
+  if (runConfig.showHelp) {
+    console.log(getHelpText());
+    return;
+  }
 
-  console.log("Structured output:\n");
-  console.log(
-    JSON.stringify(
-      {
-        provider: llm.provider,
-        model: llm.modelId,
-        preferences,
-        hackathons: ranked,
-      },
-      null,
-      2,
-    ),
-  );
+  const discovered = await discoverHackathons(runConfig.preferences);
+  const ranked = await rankHackathons(runConfig.preferences, discovered);
+  const payload = {
+    provider: llm.provider,
+    model: llm.modelId,
+    preferences: runConfig.preferences,
+    hackathons: ranked,
+  };
+
+  if (!runConfig.outputJson) {
+    printSummary(ranked);
+    console.log("Structured output:\n");
+  }
+
+  console.log(JSON.stringify(payload, null, 2));
 }
 
 main().catch((error: unknown) => {
