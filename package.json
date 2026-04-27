@@ -1,0 +1,19 @@
+{
+  "packageManager": "pnpm@10.25.0",
+  "type": "module",
+  "scripts": {
+    "dev": "tsx src/index.ts"
+  },
+  "devDependencies": {
+    "@modelcontextprotocol/sdk": "^1.29.0",
+    "@types/json-schema": "^7.0.15",
+    "@types/node": "^25.5.2",
+    "tsx": "^4.21.0",
+    "typescript": "^6.0.2"
+  },
+  "dependencies": {
+    "@ai-sdk/openai": "^3.0.53",
+    "ai": "^6.0.168",
+    "zod": "^4.3.6"
+  }
+}
