@@ -1,6 +1,8 @@
 # hackathon-scout
 
-Minimal TypeScript example for a Vercel AI SDK-powered hackathon finder that can run with either OpenAI or OpenRouter.
+TypeScript service that discovers and ranks upcoming hackathons against a user's
+preferences. It ships as both a CLI and a [Hono](https://hono.dev) HTTP API,
+backed by the Vercel AI SDK with either OpenAI or OpenRouter.
 
 ## Requirements
 
@@ -18,9 +20,9 @@ pnpm install
 
 ## Configure
 
-Copy `env.example` into your own local env file or export the variables in your shell.
+Copy `env.example` into your own local env file (or export the variables).
 
-OpenRouter example:
+OpenRouter:
 
 ```bash
 export LLM_PROVIDER=openrouter
@@ -28,7 +30,7 @@ export OPENROUTER_API_KEY=your_key_here
 export OPENROUTER_MODEL=openai/gpt-4.1-mini
 ```
 
-OpenAI example:
+OpenAI:
 
 ```bash
 export LLM_PROVIDER=openai
@@ -39,145 +41,183 @@ export OPENAI_MODEL=gpt-5-mini
 Optional knobs:
 
 - `MODEL_ID` overrides the model for either provider
-- `OPENROUTER_HTTP_REFERER` and `OPENROUTER_APP_TITLE` add OpenRouter app metadata
+- `OPENROUTER_HTTP_REFERER`, `OPENROUTER_APP_TITLE` add OpenRouter app metadata
+- `API_TOKEN` enables bearer auth on `/v1/*`
+- `CORS_ORIGINS` (comma-separated) restricts CORS; defaults to `*`
+- `LOG_LEVEL` = `debug | info | warn | error`
 
-## Run
-
-Default search:
-
-```bash
-pnpm dev
-```
-
-Custom search:
+## CLI
 
 ```bash
-pnpm dev -- --topics AI,climate,agents --region Europe --within-days 120 --max-results 8
+pnpm dev                                    # default search
+pnpm dev -- --topics AI,climate --json      # custom search, JSON-only
+pnpm dev -- --help                          # full flag reference
 ```
 
-JSON-only output:
+## HTTP API (Hono)
+
+Local dev:
 
 ```bash
-pnpm dev -- --topics AI,climate --json
+pnpm dev:api                # tsx --watch src/server.ts
+# or
+pnpm api                    # one-shot
 ```
 
-Help:
+Default address: `http://127.0.0.1:8787`
+
+The same `buildApp()` is exported by `src/api/app.ts` and reused by both the
+Node server (`src/server.ts`) and the Vercel function (`api/index.ts`).
+
+### Routes
+
+| Method | Path                  | Purpose                                          |
+| -----: | --------------------- | ------------------------------------------------ |
+|  `GET` | `/v1/health`          | Liveness + provider status                       |
+| `POST` | `/v1/scout`           | Full pipeline: discover + rank (JSON or SSE)     |
+| `POST` | `/v1/scout/discover`  | Discovery only (debug, no ranking)               |
+| `POST` | `/v1/scout/rank`      | Rank a list of pre-discovered candidates         |
+
+All `POST` bodies are validated with zod; errors return `422 VALIDATION_ERROR`
+with the failing issues in `error.details`.
+
+### Examples
+
+Health:
 
 ```bash
-pnpm dev -- --help
+curl http://127.0.0.1:8787/v1/health
 ```
 
-Validation and tests:
+Full pipeline (JSON):
+
+```bash
+curl -X POST http://127.0.0.1:8787/v1/scout \
+  -H 'content-type: application/json' \
+  -d '{
+    "topics": ["AI", "climate"],
+    "region": "Europe",
+    "withinDays": 90,
+    "maxResults": 5,
+    "remoteOnly": true,
+    "studentFriendly": true
+  }'
+```
+
+Full pipeline (Server-Sent Events — items stream as they're ranked):
+
+```bash
+curl -N -X POST http://127.0.0.1:8787/v1/scout \
+  -H 'content-type: application/json' \
+  -H 'accept: text/event-stream' \
+  -d '{ "topics": ["AI"], "region": "Europe" }'
+```
+
+The SSE stream emits `event: stage`, `event: discovered`, `event: ranked`, and
+finally `event: done` (or `event: error`).
+
+Rank a curated list:
+
+```bash
+curl -X POST http://127.0.0.1:8787/v1/scout/rank \
+  -H 'content-type: application/json' \
+  -d '{ "preferences": { ... }, "candidates": [ ... ] }'
+```
+
+### Error model
+
+Every error response shares this shape:
+
+```jsonc
+{
+  "error": {
+    "code": "VALIDATION_ERROR",   // see src/lib/errors.ts for the full enum
+    "message": "Request validation failed.",
+    "requestId": "…",
+    "details": [ /* optional, e.g. zod issues */ ]
+  }
+}
+```
+
+| Code                       | HTTP | When                                                |
+| -------------------------- | ---: | --------------------------------------------------- |
+| `VALIDATION_ERROR`         |  422 | Body failed zod validation                          |
+| `UNAUTHORIZED`             |  401 | Missing/invalid bearer when `API_TOKEN` is set      |
+| `RATE_LIMITED`             |  429 | (Reserved) Upstash sliding-window denies request    |
+| `PROVIDER_NOT_CONFIGURED`  |  503 | No API key for the selected LLM provider            |
+| `UPSTREAM_FETCH_FAILED`    |  502 | RSS/HTML fetch failed across all sources            |
+| `LLM_FAILED`               |  502 | LLM call/output schema mismatch                     |
+| `TIMEOUT`                  |  504 | Hard deadline reached                               |
+| `INTERNAL`                 |  500 | Anything else                                       |
+
+## Deploy
+
+### Vercel
+
+`api/index.ts` re-exports the Hono app via `hono/vercel`. `vercel.json`
+rewrites `/v1/*` onto the function and bumps `maxDuration` to 300s for the
+long pipeline. No extra config needed beyond the env vars.
+
+### Node container (Railway / Fly / Render / self-host)
+
+```bash
+pnpm start                  # node --import tsx src/server.ts
+```
+
+`PORT` and `HOST` env vars are honored.
+
+## Repository layout
+
+```text
+api/
+  index.ts                 # Vercel function entrypoint
+src/
+  index.ts                 # CLI entrypoint
+  server.ts                # Node server entrypoint (@hono/node-server)
+  cli.ts                   # CLI flag parsing
+  api/
+    app.ts                 # buildApp(): Hono instance, routes, middleware
+    env.ts                 # AppEnv type
+    middleware/            # request-id, logger, auth, error-handler
+    routes/                # health, scout, discover, rank
+  lib/
+    schemas.ts             # zod: Preferences, Discovered, Ranked
+    providers.ts           # lazy getModel(), getProviderInfo()
+    discovery.ts           # RSS search + scrape + enrichment (pure)
+    extract.ts             # discoverHackathons() — LLM call #1
+    rank.ts                # rankHackathons(), streamRankedHackathons()
+    scout.ts               # runScout(), streamScout() — orchestrator
+    errors.ts              # ApiError + code → status map
+tests/
+  cli.test.ts
+  api.test.ts              # exercises buildApp() via Hono's fetch test client
+vercel.json
+```
+
+## Architecture
+
+`lib/*` is pure TypeScript with zero Hono imports — the CLI, HTTP API, and
+(future) MCP server all consume it. `api/*` is transport-only: validation,
+auth, error mapping, streaming. Two thin entrypoints (`api/index.ts`,
+`src/server.ts`) wrap the same `buildApp()`.
+
+The pipeline:
+
+1. **Discovery** (`lib/discovery.ts`) — Bing RSS search, then lightweight HTML
+   scraping for evidence excerpts.
+2. **Extraction** (`lib/extract.ts`) — LLM turns the evidence into structured
+   `DiscoveredHackathon` candidates (zod-validated).
+3. **Filtering** (`lib/extract.ts`) — local code drops bad results, enforces
+   the date window + remote preference, and dedupes by title + date.
+4. **Ranking** (`lib/rank.ts`) — second LLM call scores and explains each
+   candidate; `streamRankedHackathons` yields items as the model produces them.
+
+## Testing
 
 ```bash
 pnpm typecheck
 pnpm test
 ```
 
-## API
-
-Start the API:
-
-```bash
-pnpm api
-```
-
-Default address:
-
-- `http://127.0.0.1:8787`
-
-Health check:
-
-```bash
-curl http://127.0.0.1:8787/health
-```
-
-Search endpoint:
-
-```bash
-curl -X POST http://127.0.0.1:8787/search \
-  -H 'content-type: application/json' \
-  -d '{
-    "topics": ["web3", "crypto", "blockchain"],
-    "region": "Global",
-    "withinDays": 180,
-    "maxResults": 5,
-    "remoteOnly": false,
-    "studentFriendly": true
-  }'
-```
-
-Request fields:
-
-- `topics`: string[]
-- `region`: string
-- `withinDays`: number
-- `maxResults`: number
-- `remoteOnly`: boolean
-- `studentFriendly`: boolean
-
-## Project structure
-
-```text
-src/index.ts
-src/cli.ts
-src/api.ts
-src/server.ts
-tests/cli.test.ts
-tests/api.test.ts
-tsconfig.json
-package.json
-env.example
-```
-
-## MVP architecture
-
-The current implementation keeps the first version intentionally small.
-
-1. Interface layer
-   `src/cli.ts` parses CLI flags, `src/api.ts` exposes HTTP request handling, and `src/index.ts` executes the search flow.
-2. Discovery layer
-   The script performs live web discovery through Bing RSS search plus lightweight page scraping.
-3. AI SDK extraction layer
-   The configured LLM turns raw search evidence into structured hackathon candidates.
-4. Normalization and filtering
-   Local TypeScript code removes obvious bad results, filters by date window and remote preference, and deduplicates by title plus date.
-5. Ranking layer
-   A second AI SDK model call ranks the remaining events and explains why each one matches.
-6. Output layer
-   The script prints both a readable shortlist and machine-friendly JSON.
-
-## OpenRouter notes
-
-- OpenRouter support uses the dedicated `@openrouter/ai-sdk-provider` package.
-- The discovery pipeline is provider-agnostic, so OpenRouter does not depend on OpenAI-only web search tools.
-- A real OpenRouter API key is required for an end-to-end run.
-
-## Notes
-
-- The project uses ESM, so `package.json` includes `"type": "module"`.
-- If `LLM_PROVIDER` is omitted, the script defaults to OpenAI unless only `OPENROUTER_API_KEY` is present.
-
-## Example
-
-```ts
-import { createOpenRouter } from "@openrouter/ai-sdk-provider";
-import { generateText } from "ai";
-
-const openrouter = createOpenRouter({
-  apiKey: process.env.OPENROUTER_API_KEY,
-});
-
-const model = openrouter(process.env.OPENROUTER_MODEL ?? "openai/gpt-4.1-mini");
-
-async function main() {
-  const result = await generateText({
-    model,
-    prompt: "Rank these hackathons for an AI builder in Europe",
-  });
-
-  console.log(result.text);
-}
-
-main();
-```
+`tests/api.test.ts` uses Hono's built-in `app.request(...)` test client — no
+HTTP server needs to be started.
